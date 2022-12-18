@@ -6,6 +6,7 @@ import fuzz_helpers
 with atheris.instrument_imports():
     import pyflowchart
 
+@atheris.instrument_func
 def TestOneInput(data):
     if len(data) < 2:
         return
