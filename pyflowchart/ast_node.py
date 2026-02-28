@@ -8,9 +8,8 @@ license that can be found in the LICENSE file.
 """
 
 import _ast
-import typing
 import warnings
-from typing import Tuple
+from typing import List, Tuple
 
 from pyflowchart.node import *
 
@@ -97,7 +96,7 @@ class FunctionDefStart(AstNode, StartNode):
     standing for the start of a function.
     """
 
-    def __init__(self, ast_function_def: _ast.FunctionDef, **kwargs):
+    def __init__(self, ast_function_def: _ast.stmt, **kwargs):
         AstNode.__init__(self, ast_function_def, **kwargs)
         StartNode.__init__(self, ast_function_def.name)
 
@@ -108,7 +107,7 @@ class FunctionDefEnd(AstNode, EndNode):
      standing for the end of a function.
     """
 
-    def __init__(self, ast_function_def: _ast.FunctionDef, **kwargs):
+    def __init__(self, ast_function_def: _ast.stmt, **kwargs):
         AstNode.__init__(self, ast_function_def, **kwargs)
         EndNode.__init__(self, ast_function_def.name)
 
@@ -119,13 +118,13 @@ class FunctionDefArgsInput(AstNode, InputOutputNode):
     standing for the args (input) of a function.
     """
 
-    def __init__(self, ast_function_def: _ast.FunctionDef, **kwargs):
+    def __init__(self, ast_function_def: _ast.stmt, **kwargs):
         AstNode.__init__(self, ast_function_def, **kwargs)
         InputOutputNode.__init__(self, InputOutputNode.INPUT, self.func_args_str())
 
     def func_args_str(self):
         # TODO(important): handle defaults, vararg, kwonlyargs, kw_defaults, kwarg
-        assert isinstance(self.ast_object, _ast.FunctionDef) or \
+        assert isinstance(self.ast_object, (_ast.FunctionDef, _ast.AsyncFunctionDef)) or \
                hasattr(self.ast_object, "args")
         args = []
         for arg in self.ast_object.args.args:
@@ -141,7 +140,7 @@ class FunctionDef(NodesGroup, AstNode):
     This class is a NodesGroup with FunctionDefStart & FunctionDefArgsInput & function-body & FunctionDefEnd.
     """
 
-    def __init__(self, ast_func: _ast.FunctionDef, **kwargs):  # _ast.For | _ast.While
+    def __init__(self, ast_func: _ast.stmt, **kwargs):  # _ast.FunctionDef | _ast.AsyncFunctionDef
         """
         FunctionDef.__init__ makes a NodesGroup object with following Nodes chain:
             FunctionDef -> FunctionDefStart -> FunctionDefArgsInput -> [function-body] -> FunctionDefEnd
@@ -175,7 +174,7 @@ class FunctionDef(NodesGroup, AstNode):
             - body_head
             - body_tails
         """
-        assert isinstance(self.ast_object, _ast.FunctionDef) or \
+        assert isinstance(self.ast_object, (_ast.FunctionDef, _ast.AsyncFunctionDef)) or \
                hasattr(self.ast_object, "body")
         p = parse(self.ast_object.body, **kwargs)
         return p.head, p.tails
@@ -254,14 +253,12 @@ class Loop(NodesGroup, AstNode):
         """
         Parse and Connect loop-body (a node graph) to self.cond_node (LoopCondition), extend `self.tails` with tails got.
         """
-        assert isinstance(self.ast_object, _ast.For) or \
-               isinstance(self.ast_object, _ast.While) or \
+        assert isinstance(self.ast_object, (_ast.For, _ast.While, _ast.AsyncFor)) or \
                hasattr(self.ast_object, "body")
 
-        progress = parse(self.ast_object.body, **kwargs)
+        process = parse(self.ast_object.body, **kwargs)
 
-        if progress.head is not None:
-            process = parse(self.ast_object.body, **kwargs)
+        if process.head is not None:
             # head
             self.cond_node.connect_yes(process.head)
             # tails connect back to cond
@@ -559,7 +556,13 @@ class ReturnOutput(AstNode, InputOutputNode):
 
     def __init__(self, ast_return: _ast.Return, **kwargs):
         AstNode.__init__(self, ast_return, **kwargs)
-        InputOutputNode.__init__(self, InputOutputNode.OUTPUT, self.ast_to_source().lstrip("return"))
+        # ast_to_source() gives "return <value>" or bare "return".
+        # Strip the "return" keyword: use prefix removal to avoid lstrip()'s
+        # character-set semantics (lstrip("return") strips individual chars, not the word).
+        source = self.ast_to_source()
+        if source.startswith("return"):
+            source = source[len("return"):].lstrip()
+        InputOutputNode.__init__(self, InputOutputNode.OUTPUT, source)
 
 
 class ReturnEnd(AstNode, EndNode):
@@ -704,10 +707,10 @@ class MatchCase(NodesGroup, AstNode):
         self.parse_body(**kwargs)
 
     def parse_body(self, **kwargs) -> None:
-        assert isinstance(self.ast_object, _ast.match_case) or \
+        assert isinstance(self.ast_object, _ast_match_case_t) or \
                hasattr(self.ast_object, "body")
 
-        progress = parse(self.ast_object.body)
+        progress = parse(self.ast_object.body, **kwargs)
 
         if progress.head is not None:
             self.cond_node.connect_yes(progress.head)
@@ -798,10 +801,8 @@ class Match(NodesGroup, AstNode):
         self.subject = ast_match.subject
 
         # self.head = TransparentNode(self)
-        # fuck the multi inheritance,,, my brain is buffer overflowing
-        # god bless the jetbrains helped me figure out this overstep
-        # well, never mind. I believe that NodesGroup.__init__()
-        # is the right way to set it up as well as self.head properly.
+        # Note: direct head assignment hits multi-inheritance MRO issues;
+        # NodesGroup.__init__() is the correct way to set self.head properly.
 
         # Each case is a condition node.
         # Since we have not parsed any case body, (nor I want to peek one),
@@ -818,7 +819,7 @@ class Match(NodesGroup, AstNode):
             debug(f"Match.__init__() replace head: self.head before: {type(self.head)}: {self.head.__dict__}")
             self.head = self.head.connections[0].next_node
             debug(f"Match.__init__() replace head self.head after: {type(self.head)}: {self.head.__dict__}")
-        except IndexError or AttributeError:
+        except (IndexError, AttributeError):
             self.head = CommonOperation(ast_match)
             self.tails = [self.head]
 
@@ -831,7 +832,7 @@ class Match(NodesGroup, AstNode):
         """
         Parse and Connect cases of the match
         """
-        assert isinstance(self.ast_object, _ast.Match) or \
+        assert isinstance(self.ast_object, _ast_Match_t) or \
                hasattr(self.ast_object, "cases")
 
         last_case = self.head  # at first, it's a transparent node
@@ -894,7 +895,8 @@ if sys.version_info < (3, 10):
 # TODO: Try, With
 
 __func_stmts = {
-    _ast.FunctionDef: FunctionDef
+    _ast.FunctionDef: FunctionDef,
+    _ast.AsyncFunctionDef: FunctionDef,
 }
 
 __cond_stmts = {
@@ -905,13 +907,16 @@ __cond_stmts = {
 __loop_stmts = {
     _ast.For: Loop,
     _ast.While: Loop,
+    _ast.AsyncFor: Loop,
 }
 
 __ctrl_stmts = {
     _ast.Break: BreakContinueSubroutine,
     _ast.Continue: BreakContinueSubroutine,
+    _ast.Raise: BreakContinueSubroutine,
     _ast.Return: Return,
     _ast.Yield: YieldOutput,
+    _ast.YieldFrom: YieldOutput,
     _ast.Call: CallSubroutine,
 }
 
@@ -951,11 +956,11 @@ def parse(ast_list: List[_ast.AST], **kwargs) -> ParseProcessGraph:
         ast_node_class = __special_stmts.get(type(ast_object), CommonOperation)
 
         # special case:  Match for Python 3.10+
-        if sys.version_info >= (3, 10) and type(ast_object) == _ast_Match_t:
+        if sys.version_info >= (3, 10) and isinstance(ast_object, _ast_Match_t):
             ast_node_class = Match
 
         # special case: special stmt as a expr value. e.g. function call
-        if type(ast_object) == _ast.Expr:
+        if isinstance(ast_object, _ast.Expr):
             if hasattr(ast_object, "value"):
                 ast_node_class = __special_stmts.get(type(ast_object.value), CommonOperation)
             else:  # ast_object has no value attribute

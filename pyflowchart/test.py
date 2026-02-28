@@ -518,6 +518,104 @@ sub88->sub91
 '''
 
 
+def async_func_test():
+    expr = '''
+async def fetch(url, retries=3):
+    result = await get(url)
+    return result
+    '''
+    expr_ast = ast.parse(expr)
+    p = parse(expr_ast.body)
+    flow = Flowchart(p.head).flowchart()
+    return flow
+
+
+EXPECTED_ASYNC_FUNC_TEST = '''
+st3=>start: start fetch
+io5=>inputoutput: input: url, retries
+op8=>operation: result = await get(url)
+io13=>inputoutput: output:  result
+e11=>end: end function return
+
+st3->io5
+io5->op8
+op8->io13
+io13->e11
+'''
+
+
+def async_for_test():
+    expr = '''
+async for item in aiter():
+    print(item)
+    process(item)
+done()
+    '''
+    expr_ast = ast.parse(expr)
+    p = parse(expr_ast.body)
+    flow = Flowchart(p.head).flowchart()
+    return flow
+
+
+EXPECTED_ASYNC_FOR_TEST = '''
+cond3=>condition: async for item in aiter()
+sub12=>subroutine: print(item)
+sub14=>subroutine: process(item)
+sub18=>subroutine: done()
+
+cond3(yes)->sub12
+sub12->sub14
+sub14(left)->cond3
+cond3(no)->sub18
+'''
+
+
+def raise_test():
+    expr = '''
+x = 1
+raise ValueError('oops')
+y = 2
+    '''
+    expr_ast = ast.parse(expr)
+    p = parse(expr_ast.body)
+    flow = Flowchart(p.head).flowchart()
+    return flow
+
+
+EXPECTED_RAISE_TEST = '''
+op2=>operation: x = 1
+sub4=>subroutine: raise ValueError('oops')
+
+op2->sub4
+'''
+
+
+def yield_from_test():
+    expr = '''
+def gen(n):
+    yield from range(n)
+    yield from [1, 2, 3]
+    '''
+    expr_ast = ast.parse(expr)
+    p = parse(expr_ast.body)
+    flow = Flowchart(p.head).flowchart()
+    return flow
+
+
+EXPECTED_YIELD_FROM_TEST = '''
+st11=>start: start gen
+io13=>inputoutput: input: n
+io16=>inputoutput: output: yield from range(n)
+io18=>inputoutput: output: yield from [1, 2, 3]
+e20=>end: end gen
+
+st11->io13
+io13->io16
+io16->io18
+io18->e20
+'''
+
+
 class PyflowchartTestCase(unittest.TestCase):
     def assertEqualFlowchart(self, got: str, expected: str):
         return self.assertEqual(
@@ -598,6 +696,135 @@ class PyflowchartTestCase(unittest.TestCase):
         got = match_test()
         print(got)
         self.assertEqualFlowchart(got, EXPECTED_MATCH_TEST_PY_GE_310)
+
+    def test_async_func(self):
+        got = async_func_test()
+        print(got)
+        self.assertEqualFlowchart(got, EXPECTED_ASYNC_FUNC_TEST)
+
+    def test_async_for(self):
+        got = async_for_test()
+        print(got)
+        self.assertEqualFlowchart(got, EXPECTED_ASYNC_FOR_TEST)
+
+    def test_raise(self):
+        got = raise_test()
+        print(got)
+        self.assertEqualFlowchart(got, EXPECTED_RAISE_TEST)
+
+    def test_yield_from(self):
+        got = yield_from_test()
+        print(got)
+        self.assertEqualFlowchart(got, EXPECTED_YIELD_FROM_TEST)
+
+    # ------------------------------------------------------------------ #
+    #  Tests for bug fixes                                                 #
+    # ------------------------------------------------------------------ #
+
+    def test_invalid_field_raises(self):
+        """from_code() must raise ValueError (not AssertionError) for a field
+        that does not exist in the given code.  Previously this was an assert
+        that was silently skipped under ``python -O``.
+        """
+        code = 'def foo(): pass'
+        with self.assertRaises(ValueError):
+            Flowchart.from_code(code, field='nonexistent')
+
+    def test_empty_code_raises(self):
+        """from_code() must raise ValueError when the parsed body is empty."""
+        with self.assertRaises(ValueError):
+            Flowchart.from_code('', field='', inner=True)
+
+    def test_find_field_invalid(self):
+        """find_field_from_ast() must return an AST node whose body is []
+        for a field path that does not exist.  This exercises the control-flow
+        branch that previously relied on a bare ``assert`` (broken under -O).
+        """
+        code_ast = ast.parse('def foo(): pass')
+        result = Flowchart.find_field_from_ast(code_ast, 'no.such.path')
+        self.assertEqual(result.body, [])
+
+    def test_detect_decode_utf8(self):
+        """detect_decode() must correctly decode plain UTF-8 bytes."""
+        from pyflowchart.__main__ import detect_decode
+        src = 'print("héllo")'
+        result = detect_decode(src.encode('utf-8'))
+        self.assertEqual(result, src)
+
+    def test_detect_decode_low_confidence(self):
+        """detect_decode() must not crash and must fall back to UTF-8 when
+        chardet returns a low or zero confidence score (including when the
+        detected encoding is None — the historical TypeError bug).
+        """
+        from pyflowchart.__main__ import detect_decode
+        # Empty bytes: chardet returns encoding=None, confidence=0.0 —
+        # previously caused TypeError: '<' not supported between NoneType and float
+        result = detect_decode(b'')
+        self.assertEqual(result, '')
+        # Bytes that chardet is uncertain about should also not crash
+        result2 = detect_decode(b'\xff\xfe')
+        self.assertIsInstance(result2, str)
+
+    def test_public_api_all_complete(self):
+        """__all__ in pyflowchart/__init__.py must expose every public symbol
+        and must not leak internal helpers (time, uuid, itertools, List, …).
+        """
+        import pyflowchart
+
+        # All names declared in __all__ must actually be importable
+        for name in pyflowchart.__all__:
+            self.assertTrue(
+                hasattr(pyflowchart, name),
+                msg=f"'{name}' is in __all__ but not importable from pyflowchart",
+            )
+
+        # Key public symbols must be present
+        required = [
+            'Flowchart', 'Node', 'Connection', 'NodesGroup',
+            'StartNode', 'EndNode', 'OperationNode', 'InputOutputNode',
+            'SubroutineNode', 'ConditionNode', 'TransparentNode', 'CondYN',
+            'AstNode', 'FunctionDef', 'Loop', 'If', 'CommonOperation',
+            'CallSubroutine', 'BreakContinueSubroutine', 'YieldOutput', 'Return',
+            'Match', 'MatchCase', 'ParseProcessGraph', 'parse', 'output_html',
+        ]
+        for name in required:
+            self.assertIn(name, pyflowchart.__all__, msg=f"'{name}' missing from __all__")
+
+        # Internal names must not be re-exported
+        internal = ['time', 'uuid', 'itertools', 'debug', 'AsNode',
+                    'TypeVar', 'List', 'Optional', 'Tuple']
+        for name in internal:
+            self.assertNotIn(name, pyflowchart.__all__, msg=f"internal '{name}' leaked into __all__")
+
+    def test_match_kwargs_forwarded(self):
+        """simplify=False must propagate into match-case bodies so that nested
+        if-statements are *not* collapsed.  This was broken because parse() was
+        called without **kwargs inside MatchCase.parse_body().
+        """
+        if sys.version_info < (3, 10):
+            warnings.warn("match kwargs test requires python >= 3.10")
+            return
+
+        code = '''
+def fn(a, b):
+    match a:
+        case 1:
+            if b > 0:
+                print(b)
+'''
+        # With simplify=True the inner "if b > 0: print(b)" is collapsed into
+        # a single operation node; with simplify=False it stays as a condition
+        # node followed by a separate operation node.
+        fc_simplified = Flowchart.from_code(code, field='fn', simplify=True).flowchart()
+        fc_full = Flowchart.from_code(code, field='fn', simplify=False).flowchart()
+
+        cond_simplified = len(re.findall(r'=>condition:', fc_simplified))
+        cond_full = len(re.findall(r'=>condition:', fc_full))
+
+        self.assertGreater(
+            cond_full, cond_simplified,
+            msg="simplify=False should produce more condition nodes than simplify=True inside match-case bodies",
+        )
 
 
 if __name__ == '__main__':

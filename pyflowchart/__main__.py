@@ -40,7 +40,7 @@ def detect_decode(file_content: bytes) -> str:
     encoding = detect_result.get("encoding")
     confidence = detect_result.get("confidence")
 
-    if confidence < 0.9:
+    if not confidence or confidence < 0.9:
         encoding = "UTF-8"
 
     # decode file content by detected encoding
@@ -93,7 +93,11 @@ def main(code_file, field, inner, output_file, simplify, conds_align):
     output(flowchart.flowchart(), output_file, field)
 
 
-if __name__ == '__main__':
+def cli():
+    """Entry point for the ``pyflowchart`` command-line tool.
+
+    Registered as the ``pyflowchart`` console script in pyproject.toml / setup.py.
+    """
     parser = argparse.ArgumentParser(description='Python code to flowchart.')
 
     # code_file: open as binary, detect encoding and decode in main later
@@ -113,3 +117,7 @@ if __name__ == '__main__':
         args.inner = True
 
     main(args.code_file, args.field, args.inner, args.output, args.no_simplify, args.conds_align)
+
+
+if __name__ == '__main__':
+    cli()

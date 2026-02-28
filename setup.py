@@ -5,7 +5,7 @@ with open("README.md", "rb") as fh:
 
 setuptools.setup(
     name='pyflowchart',
-    version='0.4.0-alpha.4',
+    version='0.5.0b1',
     url='https://github.com/cdfmlr/pyflowchart',
     license='MIT',
     author='CDFMLR',
@@ -19,9 +19,22 @@ setuptools.setup(
         "Environment :: Console",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Topic :: Software Development :: Code Generators",
         "Topic :: Utilities",
     ],
-    python_requires='>=3.6',
-    install_requires=['astunparse', 'chardet'],
+    python_requires='>=3.7',
+    install_requires=['astunparse; python_version < "3.9"', 'chardet'],
+    entry_points={
+        'console_scripts': [
+            'pyflowchart=pyflowchart.__main__:cli',
+        ],
+    },
 )
